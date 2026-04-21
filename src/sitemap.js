@@ -29,26 +29,30 @@ function extractUrls(parsed) {
   return urls;
 }
 
-async function getUrlsFromSitemap(sitemapUrl) {
+async function getUrlsFromSitemap(sitemapUrl, depth = 0) {
+  if (depth > 2) return [];
+
   const xml = await fetchXml(sitemapUrl);
   const parsed = parser.parse(xml);
 
-  let urls = extractUrls(parsed);
-
-  // If it's a sitemap index, fetch each child sitemap
-  if (parsed?.sitemapindex) {
-    const childUrls = await Promise.allSettled(
-      urls.slice(0, 10).map(async u => {
-        const childXml = await fetchXml(u);
-        return extractUrls(parser.parse(childXml));
-      })
-    );
-    urls = childUrls
-      .filter(r => r.status === 'fulfilled')
-      .flatMap(r => r.value);
+  // Standard sitemap — return page URLs directly
+  if (parsed?.urlset) {
+    return extractUrls(parsed);
   }
 
-  return [...new Set(urls)];
+  // Sitemap index — recursively fetch each child sitemap
+  if (parsed?.sitemapindex) {
+    const childSitemapUrls = extractUrls(parsed);
+    const results = await Promise.allSettled(
+      childSitemapUrls.slice(0, 15).map(u => getUrlsFromSitemap(u, depth + 1))
+    );
+    return [...new Set(
+      results.filter(r => r.status === 'fulfilled').flatMap(r => r.value)
+    )];
+  }
+
+  return [];
 }
+
 
 module.exports = { getUrlsFromSitemap };
