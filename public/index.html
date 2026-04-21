@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Internal Link Finder</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --cyan:   #00D9FF;
+      --green:  #22C55E;
+      --amber:  #F59E0B;
+      --red:    #EF4444;
+      --purple: #A78BFA;
+      --bg:     #080c10;
+      --bg2:    #0d1520;
+      --bg3:    #111d2b;
+      --border: #1a2535;
+      --border2:#2a3a4a;
+      --muted:  #6B7280;
+      --text:   #E5E7EB;
+      --white:  #ffffff;
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; min-height: 100vh; }
+
+    /* ── Header ── */
+    .header {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(8,12,16,0.97); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.9rem 2rem;
+      display: flex; align-items: center; gap: 1rem;
+    }
+    .logo-mark {
+      width: 32px; height: 32px; background: var(--cyan); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 800; color: #000; flex-shrink: 0;
+    }
+    .header-title { font-size: 1rem; font-weight: 700; color: var(--white); }
+    .header-title span { color: var(--cyan); }
+    .header-sub { font-size: 0.7rem; color: var(--muted); }
+
+    /* ── Layout ── */
+    .container { max-width: 860px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+    /* ── Input card ── */
+    .card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 0; padding: 1.5rem; margin-bottom: 1.5rem;
+    }
+    .card-title {
+      font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--muted); margin-bottom: 1.25rem;
+    }
+
+    .field { margin-bottom: 1rem; }
+    .field label { display: block; font-size: 0.78rem; font-weight: 600; color: var(--text); margin-bottom: 5px; }
+    .field input {
+      width: 100%;
+      background: var(--bg3); border: 1px solid var(--border2);
+      color: var(--white); font-family: 'Poppins', sans-serif; font-size: 0.82rem;
+      padding: 9px 12px; border-radius: 0; outline: none;
+      transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(0,217,255,0.1); }
+    .field input::placeholder { color: var(--muted); }
+    .field .hint { font-size: 0.7rem; color: var(--muted); margin-top: 4px; }
+
+    .toggle-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.78rem; font-weight: 500; color: var(--cyan);
+      cursor: pointer; margin-bottom: 0.75rem; user-select: none;
+    }
+    .toggle-row input[type="checkbox"] { accent-color: var(--cyan); width: 14px; height: 14px; }
+
+    .optional-fields { display: none; }
+    .optional-fields.visible { display: block; }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1.25rem 0; }
+
+    .submit-btn {
+      background: var(--cyan); color: #000;
+      border: none; font-family: 'Poppins', sans-serif;
+      font-size: 0.85rem; font-weight: 700;
+      padding: 11px 28px; cursor: pointer;
+      width: 100%; border-radius: 0;
+      transition: opacity 0.15s;
+    }
+    .submit-btn:hover { opacity: 0.88; }
+    .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Status ── */
+    #status {
+      text-align: center; padding: 1rem;
+      font-size: 0.82rem; color: var(--muted); display: none;
+    }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid var(--border2); border-top-color: var(--cyan);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      margin-right: 8px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error ── */
+    #error {
+      background: #1a0a0a; border: 1px solid #5a1a1a; border-left: 4px solid var(--red);
+      padding: 12px 16px; color: var(--red); font-size: 0.82rem;
+      display: none; margin-bottom: 1.25rem; border-radius: 0;
+    }
+
+    /* ── Results ── */
+    #results { display: none; }
+    .results-header { margin-bottom: 1.25rem; }
+    .results-header h2 { font-size: 1rem; font-weight: 700; color: var(--white); }
+    .results-header .target-meta { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+    .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    @media (max-width: 600px) { .results-grid { grid-template-columns: 1fr; } }
+
+    .result-col {}
+    .col-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      border-left: 3px solid;
+      background: var(--bg2); border-top: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+    .result-col.from .col-header { border-left-color: var(--purple); }
+    .result-col.to   .col-header { border-left-color: var(--green); }
+    .col-header h3 { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .result-col.from .col-header h3 { color: var(--purple); }
+    .result-col.to   .col-header h3 { color: var(--green); }
+    .col-header .col-sub { font-size: 0.68rem; color: var(--muted); }
+
+    .link-card {
+      background: var(--bg2);
+      border: 1px solid var(--border); border-top: none;
+      padding: 12px 14px;
+      transition: background 0.1s;
+    }
+    .link-card:hover { background: var(--bg3); }
+
+    .link-card .page-title {
+      font-size: 0.82rem; font-weight: 600; color: var(--white);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 3px;
+    }
+    .link-card .page-url {
+      font-size: 0.7rem; color: var(--cyan); text-decoration: none;
+      display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+    .link-card .page-url:hover { text-decoration: underline; }
+    .link-card .bottom-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .anchor-label { font-size: 0.68rem; color: var(--muted); }
+    .anchor-pill {
+      font-size: 0.7rem; font-style: italic; color: var(--text);
+      background: var(--bg3); border: 1px solid var(--border2);
+      padding: 1px 8px;
+    }
+    .relevance-badge {
+      margin-left: auto;
+      font-size: 0.68rem; font-weight: 600;
+      color: var(--cyan);
+    }
+
+    .empty-state {
+      background: var(--bg2); border: 1px solid var(--border); border-top: none;
+      padding: 24px; text-align: center;
+      font-size: 0.78rem; color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo-mark">IL</div>
+  <div>
+    <div class="header-title">Internal Link <span>Finder</span></div>
+    <div class="header-sub">Discover link:from and link:to opportunities for any page</div>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="card">
+    <div class="card-title">Analyze a Page</div>
+
+    <form id="analyzeForm">
+      <div class="field">
+        <label for="targetUrl">Target URL</label>
+        <input type="url" id="targetUrl" placeholder="https://example.com/page-to-boost" required />
+        <div class="hint">The page you want to improve internal link authority for</div>
+      </div>
+
+      <hr class="divider" />
+
+      <label class="toggle-row">
+        <input type="checkbox" id="toggleSitemap" /> Add sitemap.xml
+      </label>
+      <div class="optional-fields" id="sitemapFields">
+        <div class="field">
+          <label for="sitemapUrl">Sitemap URL</label>
+          <input type="url" id="sitemapUrl" placeholder="https://example.com/sitemap.xml" />
+        </div>
+      </div>
+
+      <label class="toggle-row">
+        <input type="checkbox" id="toggleKeyword" /> Add keyword + SERP
+      </label>
+      <div class="optional-fields" id="keywordFields">
+        <div class="field">
+          <label for="keyword">Keyword</label>
+          <input type="text" id="keyword" placeholder="e.g. internal linking seo" />
+          <div class="hint">Uses Serper to find topically relevant pages on the site</div>
+        </div>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submitBtn">Find Opportunities</button>
+    </form>
+  </div>
+
+  <div id="error"></div>
+  <div id="status"><span class="spinner"></span><span id="statusText">Crawling pages and analyzing relevance…</span></div>
+
+  <div id="results">
+    <div class="results-header">
+      <h2>Link Opportunities</h2>
+      <div class="target-meta" id="resultTargetUrl"></div>
+    </div>
+    <div class="results-grid">
+      <div class="result-col from">
+        <div class="col-header">
+          <div>
+            <h3>Link: From</h3>
+            <div class="col-sub">Pages that should link <strong>to</strong> your target</div>
+          </div>
+        </div>
+        <div id="linkFromList"></div>
+      </div>
+      <div class="result-col to">
+        <div class="col-header">
+          <div>
+            <h3>Link: To</h3>
+            <div class="col-sub">Your target should link <strong>to</strong> these pages</div>
+          </div>
+        </div>
+        <div id="linkToList"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  document.getElementById('toggleSitemap').addEventListener('change', e => {
+    document.getElementById('sitemapFields').classList.toggle('visible', e.target.checked);
+  });
+  document.getElementById('toggleKeyword').addEventListener('change', e => {
+    document.getElementById('keywordFields').classList.toggle('visible', e.target.checked);
+  });
+
+  document.getElementById('analyzeForm').addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const targetUrl = document.getElementById('targetUrl').value.trim();
+    const sitemapUrl = document.getElementById('toggleSitemap').checked
+      ? document.getElementById('sitemapUrl').value.trim() : '';
+    const keyword = document.getElementById('toggleKeyword').checked
+      ? document.getElementById('keyword').value.trim() : '';
+
+    const btn = document.getElementById('submitBtn');
+    const status = document.getElementById('status');
+    const error = document.getElementById('error');
+    const results = document.getElementById('results');
+
+    btn.disabled = true;
+    error.style.display = 'none';
+    results.style.display = 'none';
+    status.style.display = 'block';
+
+    const msgs = [
+      'Crawling target page…',
+      'Discovering candidate pages…',
+      'Crawling and scoring pages…',
+      'Calculating relevance scores…',
+      'Almost done…',
+    ];
+    let mi = 0;
+    const interval = setInterval(() => {
+      mi = (mi + 1) % msgs.length;
+      document.getElementById('statusText').textContent = msgs[mi];
+    }, 3500);
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUrl, sitemapUrl, keyword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      renderResults(data);
+    } catch (err) {
+      error.textContent = err.message;
+      error.style.display = 'block';
+    } finally {
+      clearInterval(interval);
+      btn.disabled = false;
+      status.style.display = 'none';
+    }
+  });
+
+  function renderResults(data) {
+    document.getElementById('resultTargetUrl').textContent = data.target.title
+      ? `${data.target.title} — ${data.target.url}`
+      : data.target.url;
+    renderList('linkFromList', data.linkFrom);
+    renderList('linkToList', data.linkTo);
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderList(id, items) {
+    const el = document.getElementById(id);
+    if (!items || !items.length) {
+      el.innerHTML = '<div class="empty-state">No opportunities found</div>';
+      return;
+    }
+    el.innerHTML = items.map(item => `
+      <div class="link-card">
+        <div class="page-title" title="${esc(item.title)}">${esc(item.title)}</div>
+        <a class="page-url" href="${esc(item.url)}" target="_blank" rel="noopener">${esc(item.url)}</a>
+        <div class="bottom-row">
+          <span class="anchor-label">Anchor:</span>
+          <span class="anchor-pill">${esc(item.suggestedAnchor)}</span>
+          <span class="relevance-badge">${item.relevance}% match</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+
+</body>
+</html>
