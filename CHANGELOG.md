@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-22
+### Changed
+- Field-weighted relevance scoring: title/H1 weighted 5x, headings/meta 3x, body 1x
+- Scores normalized to 0–100 relative to top result (more meaningful percentages)
+
 ## [1.2.0] - 2026-04-22
 ### Added
 - Claude Haiku anchor text suggestions via single batch API call (~$0.005/run)

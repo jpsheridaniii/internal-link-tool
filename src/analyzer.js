@@ -12,9 +12,16 @@ function tokenize(text) {
   return text.toLowerCase().match(/[a-z]{3,}/g)?.filter(w => !STOP_WORDS.has(w)) || [];
 }
 
-function buildTf(tokens) {
+function buildWeightedTf(page) {
   const tf = {};
-  tokens.forEach(t => { tf[t] = (tf[t] || 0) + 1; });
+  const add = (text, weight) => {
+    tokenize(text).forEach(t => { tf[t] = (tf[t] || 0) + weight; });
+  };
+  add(page.title, 5);
+  add(page.h1, 5);
+  add(page.metaDesc, 3);
+  (page.headings || []).forEach(h => add(h, 3));
+  add(page.text, 1);
   return tf;
 }
 
@@ -29,10 +36,16 @@ function cosineSimilarity(tfA, tfB) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
+// Normalize raw cosine scores to a 0–100 scale relative to the top result
+function normalizeScores(scored) {
+  const max = scored[0]?.relevance || 1;
+  return scored.map(s => ({ ...s, relevance: s.relevance / max }));
+}
+
 async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
   const target = await crawlPage(targetUrl);
   const normalizedTarget = targetUrl.split('#')[0].replace(/\/$/, '');
-  const targetTf = buildTf(tokenize(`${target.title} ${target.h1} ${target.metaDesc} ${target.text}`));
+  const targetTf = buildWeightedTf(target);
 
   const pages = [];
   for (let i = 0; i < candidateUrls.length; i += 5) {
@@ -43,10 +56,10 @@ async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
 
   const targetOutbound = new Set(target.outboundLinks.map(u => u.replace(/\/$/, '')));
 
-  const scored = pages.map(page => {
+  const rawScored = pages.map(page => {
     const normalizedPageUrl = page.url.replace(/\/$/, '');
     if (normalizedPageUrl === normalizedTarget) return null;
-    const pageTf = buildTf(tokenize(`${page.title} ${page.h1} ${page.metaDesc} ${page.text}`));
+    const pageTf = buildWeightedTf(page);
     const relevance = cosineSimilarity(targetTf, pageTf);
     const pageOutbound = new Set(page.outboundLinks.map(u => u.replace(/\/$/, '')));
     return {
@@ -56,6 +69,8 @@ async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
       targetAlreadyLinksTo: targetOutbound.has(normalizedPageUrl),
     };
   }).filter(Boolean).sort((a, b) => b.relevance - a.relevance);
+
+  const scored = normalizeScores(rawScored);
 
   const topLinkFrom = scored.filter(s => !s.alreadyLinksToTarget && s.relevance > 0.01).slice(0, 6);
   const topLinkTo   = scored.filter(s => !s.targetAlreadyLinksTo && s.relevance > 0.01).slice(0, 6);
