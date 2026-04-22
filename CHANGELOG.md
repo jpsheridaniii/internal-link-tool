@@ -1,7 +1,12 @@
 # Changelog
 
 ## [Unreleased]
-- Ahrefs organic keyword integration for anchor text suggestions
+
+## [1.2.0] - 2026-04-22
+### Added
+- Claude Haiku anchor text suggestions via single batch API call (~$0.005/run)
+- H2/H3 heading extraction in crawler for heading-based anchor fallback
+- Graceful fallback: heading-based anchors if Claude call fails or key missing
 
 ## [1.0.0] - 2026-04-21
 ### Added

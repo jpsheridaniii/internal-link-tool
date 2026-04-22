@@ -1,4 +1,5 @@
 const { crawlPage } = require('./crawler');
+const { headingAnchor, claudeAnchors } = require('./anchors');
 
 const STOP_WORDS = new Set([
   'the','a','an','and','or','but','in','on','at','to','for','of','with',
@@ -28,15 +29,7 @@ function cosineSimilarity(tfA, tfB) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-function buildAnchor(page) {
-  const source = page.h1 || page.title || '';
-  const clean = source.split(/ [|\-–—] /)[0].trim();
-  const words = tokenize(clean);
-  if (clean.length <= 50) return clean.toLowerCase();
-  return words.slice(0, 4).join(' ') || clean.toLowerCase();
-}
-
-async function analyzeOpportunities(targetUrl, candidateUrls) {
+async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
   const target = await crawlPage(targetUrl);
   const normalizedTarget = targetUrl.split('#')[0].replace(/\/$/, '');
   const targetTf = buildTf(tokenize(`${target.title} ${target.h1} ${target.metaDesc} ${target.text}`));
@@ -64,25 +57,42 @@ async function analyzeOpportunities(targetUrl, candidateUrls) {
     };
   }).filter(Boolean).sort((a, b) => b.relevance - a.relevance);
 
-  const linkFrom = scored
-    .filter(s => !s.alreadyLinksToTarget && s.relevance > 0.01)
-    .slice(0, 6)
-    .map(s => ({
-      url: s.page.url,
-      title: s.page.title || s.page.url,
-      relevance: Math.round(s.relevance * 100),
-      suggestedAnchor: buildAnchor(target),
-    }));
+  const topLinkFrom = scored.filter(s => !s.alreadyLinksToTarget && s.relevance > 0.01).slice(0, 6);
+  const topLinkTo   = scored.filter(s => !s.targetAlreadyLinksTo && s.relevance > 0.01).slice(0, 6);
 
-  const linkTo = scored
-    .filter(s => !s.targetAlreadyLinksTo && s.relevance > 0.01)
-    .slice(0, 6)
-    .map(s => ({
-      url: s.page.url,
-      title: s.page.title || s.page.url,
-      relevance: Math.round(s.relevance * 100),
-      suggestedAnchor: buildAnchor(s.page),
-    }));
+  // Heading-based anchors as baseline
+  const fromAnchors = topLinkFrom.map(s => headingAnchor(target, s.page));
+  const toAnchors   = topLinkTo.map(s => headingAnchor(s.page, target));
+
+  // Upgrade with Claude if API key is available
+  if (anthropicApiKey) {
+    try {
+      const aiAnchors = await claudeAnchors(
+        target,
+        topLinkFrom.map(s => s.page),
+        topLinkTo.map(s => s.page),
+        anthropicApiKey
+      );
+      if (aiAnchors?.from) aiAnchors.from.forEach((a, i) => { if (a) fromAnchors[i] = a; });
+      if (aiAnchors?.to)   aiAnchors.to.forEach((a, i)   => { if (a) toAnchors[i] = a; });
+    } catch (e) {
+      console.warn('[claude anchors] fell back to headings:', e.message);
+    }
+  }
+
+  const linkFrom = topLinkFrom.map((s, i) => ({
+    url: s.page.url,
+    title: s.page.title || s.page.url,
+    relevance: Math.round(s.relevance * 100),
+    suggestedAnchor: fromAnchors[i],
+  }));
+
+  const linkTo = topLinkTo.map((s, i) => ({
+    url: s.page.url,
+    title: s.page.title || s.page.url,
+    relevance: Math.round(s.relevance * 100),
+    suggestedAnchor: toAnchors[i],
+  }));
 
   return { target: { url: target.url, title: target.title, h1: target.h1 }, linkFrom, linkTo };
 }

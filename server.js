@@ -59,7 +59,7 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(422).json({ error: 'No candidate pages found. Try adding a sitemap or keyword.' });
     }
 
-    const results = await analyzeOpportunities(targetUrl, candidateUrls);
+    const results = await analyzeOpportunities(targetUrl, candidateUrls, process.env.ANTHROPIC_API_KEY);
     res.json(results);
   } catch (err) {
     console.error('[analyze]', err.message);

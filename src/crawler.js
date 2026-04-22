@@ -25,6 +25,13 @@ function parsePage(html, baseUrl) {
   const h1 = $('h1').first().text().trim();
   const metaDesc = $('meta[name="description"]').attr('content') || '';
 
+  // Extract H2/H3 headings for anchor text context
+  const headings = [];
+  $('h2, h3').each((_, el) => {
+    const text = $(el).text().trim();
+    if (text && text.length < 120) headings.push(text);
+  });
+
   // Collect internal outbound links from this page
   const outboundLinks = new Set();
   $('a[href]').each((_, el) => {
@@ -36,7 +43,7 @@ function parsePage(html, baseUrl) {
     } catch {}
   });
 
-  return { url: baseUrl, title, h1, metaDesc, text, outboundLinks: [...outboundLinks] };
+  return { url: baseUrl, title, h1, metaDesc, headings, text, outboundLinks: [...outboundLinks] };
 }
 
 async function crawlPage(url) {
