@@ -28,41 +28,24 @@ function cosineSimilarity(tfA, tfB) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-function suggestAnchorText(targetPage, sourcePage) {
-  const targetTokens = new Set(tokenize(`${targetPage.title} ${targetPage.h1} ${targetPage.metaDesc}`));
-  const sourceText = `${sourcePage.title} ${sourcePage.h1} ${sourcePage.text}`;
-  const sourceTokens = tokenize(sourceText);
-
-  // Find 2-4 word phrases in source that overlap with target topic
-  const words = sourceText.toLowerCase().match(/[a-z]{3,}/g) || [];
-  const phrases = [];
-  for (let i = 0; i < words.length - 1; i++) {
-    if (targetTokens.has(words[i]) && !STOP_WORDS.has(words[i + 1])) {
-      const phrase = `${words[i]} ${words[i + 1]}`;
-      if (!phrases.includes(phrase)) phrases.push(phrase);
-    }
-    if (phrases.length >= 3) break;
-  }
-
-  return phrases.length ? phrases[0] : tokenize(targetPage.title)[0] || 'related content';
+function buildAnchor(page) {
+  const source = page.h1 || page.title || '';
+  const clean = source.split(/ [|\-–—] /)[0].trim();
+  const words = tokenize(clean);
+  if (clean.length <= 50) return clean.toLowerCase();
+  return words.slice(0, 4).join(' ') || clean.toLowerCase();
 }
 
 async function analyzeOpportunities(targetUrl, candidateUrls) {
-  // Crawl target page
   const target = await crawlPage(targetUrl);
   const normalizedTarget = targetUrl.split('#')[0].replace(/\/$/, '');
   const targetTf = buildTf(tokenize(`${target.title} ${target.h1} ${target.metaDesc} ${target.text}`));
 
-  // Crawl candidates in batches of 5 to avoid hammering servers
   const pages = [];
-  const batches = [];
-  for (let i = 0; i < candidateUrls.length; i += 5) batches.push(candidateUrls.slice(i, i + 5));
-
-  for (const batch of batches) {
+  for (let i = 0; i < candidateUrls.length; i += 5) {
+    const batch = candidateUrls.slice(i, i + 5);
     const results = await Promise.allSettled(batch.map(url => crawlPage(url)));
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') pages.push(r.value);
-    });
+    results.forEach(r => { if (r.status === 'fulfilled') pages.push(r.value); });
   }
 
   const targetOutbound = new Set(target.outboundLinks.map(u => u.replace(/\/$/, '')));
@@ -70,20 +53,17 @@ async function analyzeOpportunities(targetUrl, candidateUrls) {
   const scored = pages.map(page => {
     const normalizedPageUrl = page.url.replace(/\/$/, '');
     if (normalizedPageUrl === normalizedTarget) return null;
-
     const pageTf = buildTf(tokenize(`${page.title} ${page.h1} ${page.metaDesc} ${page.text}`));
     const relevance = cosineSimilarity(targetTf, pageTf);
-
     const pageOutbound = new Set(page.outboundLinks.map(u => u.replace(/\/$/, '')));
-    const alreadyLinksToTarget = pageOutbound.has(normalizedTarget);
-    const targetAlreadyLinksTo = targetOutbound.has(normalizedPageUrl);
+    return {
+      page,
+      relevance,
+      alreadyLinksToTarget: pageOutbound.has(normalizedTarget),
+      targetAlreadyLinksTo: targetOutbound.has(normalizedPageUrl),
+    };
+  }).filter(Boolean).sort((a, b) => b.relevance - a.relevance);
 
-    return { page, relevance, alreadyLinksToTarget, targetAlreadyLinksTo };
-  }).filter(Boolean);
-
-  scored.sort((a, b) => b.relevance - a.relevance);
-
-  // link:from — pages that should link TO the target (don't already)
   const linkFrom = scored
     .filter(s => !s.alreadyLinksToTarget && s.relevance > 0.01)
     .slice(0, 6)
@@ -91,10 +71,9 @@ async function analyzeOpportunities(targetUrl, candidateUrls) {
       url: s.page.url,
       title: s.page.title || s.page.url,
       relevance: Math.round(s.relevance * 100),
-      suggestedAnchor: suggestAnchorText(target, s.page),
+      suggestedAnchor: buildAnchor(target),
     }));
 
-  // link:to — pages the target should link TO (doesn't already)
   const linkTo = scored
     .filter(s => !s.targetAlreadyLinksTo && s.relevance > 0.01)
     .slice(0, 6)
@@ -102,7 +81,7 @@ async function analyzeOpportunities(targetUrl, candidateUrls) {
       url: s.page.url,
       title: s.page.title || s.page.url,
       relevance: Math.round(s.relevance * 100),
-      suggestedAnchor: suggestAnchorText(s.page, target),
+      suggestedAnchor: buildAnchor(s.page),
     }));
 
   return { target: { url: target.url, title: target.title, h1: target.h1 }, linkFrom, linkTo };
