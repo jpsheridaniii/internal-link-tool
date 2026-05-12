@@ -6,6 +6,7 @@ const { crawlPage } = require('./src/crawler');
 const { getUrlsFromSitemap } = require('./src/sitemap');
 const { getSerpPages } = require('./src/serp');
 const { analyzeOpportunities } = require('./src/analyzer');
+const { isUtilityPage } = require('./src/filter');
 
 const app = express();
 app.use(cors());
@@ -21,7 +22,19 @@ app.post('/api/analyze', async (req, res) => {
     const origin = new URL(targetUrl).origin;
     let candidateUrls = [];
 
-    // 1. Sitemap discovery
+    let serpUrls = [];
+
+    // 1. SERP discovery first — Google already ranked these for topical relevance
+    if (keyword && process.env.SERPER_API_KEY) {
+      try {
+        serpUrls = await getSerpPages(keyword, origin, process.env.SERPER_API_KEY);
+        candidateUrls.push(...serpUrls);
+      } catch (e) {
+        console.warn('SERP fetch failed:', e.message);
+      }
+    }
+
+    // 2. Sitemap discovery — fills the pool; slug pre-scoring picks the best ones
     if (sitemapUrl) {
       try {
         const sitemapUrls = await getUrlsFromSitemap(sitemapUrl);
@@ -31,35 +44,30 @@ app.post('/api/analyze', async (req, res) => {
       }
     }
 
-    // 2. SERP discovery via Serper
-    if (keyword && process.env.SERPER_API_KEY) {
-      try {
-        const serpUrls = await getSerpPages(keyword, origin, process.env.SERPER_API_KEY);
-        candidateUrls.push(...serpUrls);
-      } catch (e) {
-        console.warn('SERP fetch failed:', e.message);
-      }
-    }
-
     // 3. Fallback: crawl internal links from target page
     if (candidateUrls.length === 0) {
       const targetPage = await crawlPage(targetUrl);
       candidateUrls.push(...targetPage.outboundLinks);
     }
 
-    // Dedupe, remove target itself, limit to 40 pages to keep analysis fast
+    // Dedupe, remove target itself, strip utility/nav pages
+    // Pass a larger pool (75) to the analyzer — it pre-ranks by slug before crawling
     const normalized = targetUrl.split('#')[0].replace(/\/$/, '');
-    candidateUrls = [...new Set(
+    const allInternal = [...new Set(
       candidateUrls
         .map(u => u.split('#')[0].replace(/\/$/, ''))
         .filter(u => u.startsWith(origin) && u !== normalized)
-    )].slice(0, 40);
+    )];
+    const filtered = allInternal.filter(u => !isUtilityPage(u));
+    console.log(`[filter] ${allInternal.length} internal → ${filtered.length} after utility strip`);
+    allInternal.filter(u => isUtilityPage(u)).forEach(u => console.log(`  [blocked] ${u}`));
+    candidateUrls = filtered.slice(0, 75);
 
     if (candidateUrls.length === 0) {
       return res.status(422).json({ error: 'No candidate pages found. Try adding a sitemap or keyword.' });
     }
 
-    const results = await analyzeOpportunities(targetUrl, candidateUrls, process.env.ANTHROPIC_API_KEY);
+    const results = await analyzeOpportunities(targetUrl, candidateUrls, process.env.ANTHROPIC_API_KEY, keyword, process.env.SERPER_API_KEY);
     res.json(results);
   } catch (err) {
     console.error('[analyze]', err.message);

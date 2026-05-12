@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-27
+### Added
+- Multi-SERP expansion: after crawling the target, extracts H2/H3 topic phrases and runs up to 3 additional SERP queries to surface topically adjacent candidates that slug scoring alone would miss
+- Placement hints: each result card now shows "Place near: [heading]" — the best heading on the source page to add the link
+- Link stats bar: shows outbound link count, candidates checked, and already-linked counts for the target page
+- CSV export: "↓ Export CSV" button downloads all results with Type, Title, URL, Relevance, Anchor, and Place Near columns
+
+## [1.4.0] - 2026-04-25
+### Added
+- Utility page filter: contact, about, privacy, terms, login, cart, FAQ, etc. excluded from link candidates
+- Anchor text cannibalization prevention: Claude avoids using the target page's focus keywords as anchor text for outgoing LINK:TO links
+
+## [1.3.0] - 2026-04-23
+### Added
+- Claude-scored relevance: match % now reflects topical understanding, not just keyword overlap
+- Single batch call handles both anchor text and relevance scoring (~same cost as before)
+### Changed
+- Candidate page limit reduced 40→25 to ensure Claude call completes within request window
+
 ## [1.2.1] - 2026-04-22
 ### Changed
 - Field-weighted relevance scoring: title/H1 weighted 5x, headings/meta 3x, body 1x

@@ -118,7 +118,7 @@
 
     /* ── Results ── */
     #results { display: none; }
-    .results-header { margin-bottom: 1.25rem; }
+    .results-header { margin-bottom: 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
     .results-header h2 { font-size: 1rem; font-weight: 700; color: var(--white); }
     .results-header .target-meta { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
 
@@ -180,6 +180,40 @@
       font-size: 0.68rem; font-weight: 600;
       color: var(--cyan);
     }
+
+    .regen-btn {
+      background: transparent; color: var(--cyan);
+      border: 1px solid var(--cyan); font-family: 'Poppins', sans-serif;
+      font-size: 0.82rem; font-weight: 600;
+      padding: 8px 20px; cursor: pointer; border-radius: 0;
+      transition: background 0.15s, color 0.15s; white-space: nowrap;
+    }
+    .regen-btn:hover { background: var(--cyan); color: #000; }
+    .regen-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .csv-btn {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border2); font-family: 'Poppins', sans-serif;
+      font-size: 0.82rem; font-weight: 600;
+      padding: 8px 20px; cursor: pointer; border-radius: 0;
+      transition: border-color 0.15s, color 0.15s; white-space: nowrap;
+    }
+    .csv-btn:hover { border-color: var(--text); color: var(--text); }
+
+    .stats-bar {
+      display: flex; gap: 1.5rem; flex-wrap: wrap;
+      padding: 10px 0 1.25rem;
+      border-bottom: 1px solid var(--border); margin-bottom: 1.25rem;
+    }
+    .stat { font-size: 0.72rem; color: var(--muted); }
+    .stat strong { color: var(--text); font-weight: 600; }
+
+    .section-hint {
+      font-size: 0.68rem; color: var(--muted);
+      margin-top: 5px; padding-top: 5px;
+      border-top: 1px solid var(--border);
+    }
+    .section-hint span { color: var(--text); font-style: italic; }
 
     .empty-state {
       background: var(--bg2); border: 1px solid var(--border); border-top: none;
@@ -245,9 +279,16 @@
 
   <div id="results">
     <div class="results-header">
-      <h2>Link Opportunities</h2>
-      <div class="target-meta" id="resultTargetUrl"></div>
+      <div>
+        <h2>Link Opportunities</h2>
+        <div class="target-meta" id="resultTargetUrl"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="csv-btn" onclick="downloadCsv()">↓ Export CSV</button>
+        <button id="regenBtn" class="regen-btn">↻ Re-run</button>
+      </div>
     </div>
+    <div class="stats-bar" id="statsBar"></div>
     <div class="results-grid">
       <div class="result-col from">
         <div class="col-header">
@@ -280,21 +321,15 @@
     document.getElementById('keywordFields').classList.toggle('visible', e.target.checked);
   });
 
-  document.getElementById('analyzeForm').addEventListener('submit', async e => {
-    e.preventDefault();
+  async function runAnalysis(targetUrl, sitemapUrl, keyword) {
+    const submitBtn = document.getElementById('submitBtn');
+    const regenBtn  = document.getElementById('regenBtn');
+    const status    = document.getElementById('status');
+    const error     = document.getElementById('error');
+    const results   = document.getElementById('results');
 
-    const targetUrl = document.getElementById('targetUrl').value.trim();
-    const sitemapUrl = document.getElementById('toggleSitemap').checked
-      ? document.getElementById('sitemapUrl').value.trim() : '';
-    const keyword = document.getElementById('toggleKeyword').checked
-      ? document.getElementById('keyword').value.trim() : '';
-
-    const btn = document.getElementById('submitBtn');
-    const status = document.getElementById('status');
-    const error = document.getElementById('error');
-    const results = document.getElementById('results');
-
-    btn.disabled = true;
+    submitBtn.disabled = true;
+    regenBtn.disabled  = true;
     error.style.display = 'none';
     results.style.display = 'none';
     status.style.display = 'block';
@@ -326,15 +361,49 @@
       error.style.display = 'block';
     } finally {
       clearInterval(interval);
-      btn.disabled = false;
+      submitBtn.disabled = false;
+      regenBtn.disabled  = false;
       status.style.display = 'none';
     }
+  }
+
+  document.getElementById('analyzeForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const targetUrl = document.getElementById('targetUrl').value.trim();
+    const sitemapUrl = document.getElementById('toggleSitemap').checked
+      ? document.getElementById('sitemapUrl').value.trim() : '';
+    const keyword = document.getElementById('toggleKeyword').checked
+      ? document.getElementById('keyword').value.trim() : '';
+    runAnalysis(targetUrl, sitemapUrl, keyword);
   });
 
+  document.getElementById('regenBtn').addEventListener('click', () => {
+    const targetUrl = document.getElementById('targetUrl').value.trim();
+    const sitemapUrl = document.getElementById('toggleSitemap').checked
+      ? document.getElementById('sitemapUrl').value.trim() : '';
+    const keyword = document.getElementById('toggleKeyword').checked
+      ? document.getElementById('keyword').value.trim() : '';
+    runAnalysis(targetUrl, sitemapUrl, keyword);
+  });
+
+  let lastResults = null;
+
   function renderResults(data) {
+    lastResults = data;
     document.getElementById('resultTargetUrl').textContent = data.target.title
       ? `${data.target.title} — ${data.target.url}`
       : data.target.url;
+
+    if (data.stats) {
+      const s = data.stats;
+      document.getElementById('statsBar').innerHTML = `
+        <div class="stat">Outbound links on page: <strong>${s.outboundLinks}</strong></div>
+        <div class="stat">Candidates checked: <strong>${s.candidatesChecked}</strong></div>
+        <div class="stat">Already linking to target: <strong>${s.alreadyLinkedFrom}</strong></div>
+        <div class="stat">Target already links to: <strong>${s.alreadyLinkedTo}</strong></div>
+      `;
+    }
+
     renderList('linkFromList', data.linkFrom);
     renderList('linkToList', data.linkTo);
     document.getElementById('results').style.display = 'block';
@@ -354,10 +423,30 @@
         <div class="bottom-row">
           <span class="anchor-label">Anchor:</span>
           <span class="anchor-pill">${esc(item.suggestedAnchor)}</span>
-<span class="relevance-badge">${item.relevance}% match</span>
+          <span class="relevance-badge">${item.relevance}% match</span>
         </div>
+        ${item.suggestedSection ? `<div class="section-hint">Place near: <span>${esc(item.suggestedSection)}</span></div>` : ''}
       </div>
     `).join('');
+  }
+
+  function downloadCsv() {
+    if (!lastResults) return;
+    const rows = [
+      ['Type', 'Page Title', 'URL', 'Relevance %', 'Suggested Anchor', 'Place Near'],
+    ];
+    (lastResults.linkFrom || []).forEach(item => {
+      rows.push(['Link From', item.title, item.url, item.relevance, item.suggestedAnchor, item.suggestedSection || '']);
+    });
+    (lastResults.linkTo || []).forEach(item => {
+      rows.push(['Link To', item.title, item.url, item.relevance, item.suggestedAnchor, item.suggestedSection || '']);
+    });
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
+      download: 'internal-links.csv',
+    });
+    a.click();
   }
 
   function esc(s) {

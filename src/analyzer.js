@@ -1,5 +1,7 @@
 const { crawlPage } = require('./crawler');
-const { headingAnchor, claudeAnchors } = require('./anchors');
+const { getSerpPages } = require('./serp');
+const { headingAnchor, claudeEnrich } = require('./anchors');
+const { isUtilityPage } = require('./filter');
 
 const STOP_WORDS = new Set([
   'the','a','an','and','or','but','in','on','at','to','for','of','with',
@@ -36,20 +38,85 @@ function cosineSimilarity(tfA, tfB) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-// Normalize raw cosine scores to a 0–100 scale relative to the top result
 function normalizeScores(scored) {
   const max = scored[0]?.relevance || 1;
   return scored.map(s => ({ ...s, relevance: s.relevance / max }));
 }
 
-async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
+// Paths that indicate substantive linkable content — small pre-rank bonus
+const CONTENT_PATHS = [
+  '/resource', '/blog', '/article', '/guide', '/learn', '/insight',
+  '/solution', '/product', '/feature', '/platform', '/tool', '/calculator',
+  '/template', '/checklist', '/ebook', '/webinar', '/case-study', '/glossary',
+  '/hcm', '/software', '/service',
+];
+
+function slugScore(url, tokens) {
+  const path = new URL(url).pathname.toLowerCase();
+  const slug = path.replace(/[-_/]/g, ' ');
+  const tokenScore = tokens.filter(t => slug.includes(t)).length;
+  const contentBonus = CONTENT_PATHS.some(p => path.startsWith(p)) ? 1 : 0;
+  return tokenScore + contentBonus;
+}
+
+// Returns the heading on sourcePage most topically relevant to targetPage's subject.
+// Used to tell the user WHERE on the page to place the link.
+function findBestSection(sourcePage, targetPage) {
+  const targetTokens = new Set(
+    tokenize(`${targetPage.title} ${targetPage.h1} ${targetPage.metaDesc}`)
+  );
+  let best = null, bestScore = 0;
+  for (const h of (sourcePage.headings || [])) {
+    const score = tokenize(h).filter(w => targetTokens.has(w)).length;
+    if (score > bestScore) { bestScore = score; best = h; }
+  }
+  return best || null;
+}
+
+async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey, keyword, serpApiKey) {
   const target = await crawlPage(targetUrl);
+  const origin = new URL(targetUrl).origin;
   const normalizedTarget = targetUrl.split('#')[0].replace(/\/$/, '');
   const targetTf = buildWeightedTf(target);
 
+  // Expand candidate pool: run extra SERP queries using target's H2/H3 topics.
+  // This surfaces topically adjacent pages that slug scoring alone would miss.
+  if (serpApiKey && target.headings?.length) {
+    const topicQueries = [...new Set(
+      target.headings
+        .map(h => h.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim())
+        .filter(q => q.split(' ').filter(w => w.length > 2).length >= 2)
+    )].slice(0, 3);
+
+    const extraResults = await Promise.all(
+      topicQueries.map(q => getSerpPages(q, origin, serpApiKey).catch(() => []))
+    );
+    const existing = new Set(candidateUrls);
+    extraResults.flat()
+      .map(u => u.split('#')[0].replace(/\/$/, ''))
+      .filter(u => u.startsWith(origin) && u !== normalizedTarget && !existing.has(u) && !isUtilityPage(u))
+      .forEach(u => { existing.add(u); candidateUrls.push(u); });
+
+    console.log(`[serp-expand] pool grew to ${candidateUrls.length} candidates`);
+  }
+
+  // Pre-rank by slug match before crawling — uses title, H1, meta, headings, keyword
+  const tokenSrc = [
+    target.title, target.h1, target.metaDesc,
+    keyword || '',
+    ...(target.headings || []),
+  ].join(' ');
+  const targetTokens = tokenize(tokenSrc);
+  const ranked = candidateUrls
+    .map(url => ({ url, score: slugScore(url, targetTokens) }))
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.url);
+  console.log(`[pre-rank] top candidates: ${ranked.slice(0, 5).join(', ')}`);
+  const toCrawl = ranked.slice(0, 25);
+
   const pages = [];
-  for (let i = 0; i < candidateUrls.length; i += 5) {
-    const batch = candidateUrls.slice(i, i + 5);
+  for (let i = 0; i < toCrawl.length; i += 5) {
+    const batch = toCrawl.slice(i, i + 5);
     const results = await Promise.allSettled(batch.map(url => crawlPage(url)));
     results.forEach(r => { if (r.status === 'fulfilled') pages.push(r.value); });
   }
@@ -72,44 +139,69 @@ async function analyzeOpportunities(targetUrl, candidateUrls, anthropicApiKey) {
 
   const scored = normalizeScores(rawScored);
 
+  const alreadyLinkedFrom = scored.filter(s => s.alreadyLinksToTarget).length;
+  const alreadyLinkedTo   = scored.filter(s => s.targetAlreadyLinksTo).length;
+
   const topLinkFrom = scored.filter(s => !s.alreadyLinksToTarget && s.relevance > 0.01).slice(0, 6);
   const topLinkTo   = scored.filter(s => !s.targetAlreadyLinksTo && s.relevance > 0.01).slice(0, 6);
 
-  // Heading-based anchors as baseline
-  const fromAnchors = topLinkFrom.map(s => headingAnchor(target, s.page));
-  const toAnchors   = topLinkTo.map(s => headingAnchor(s.page, target));
+  // Placement hints: best heading on source page to place the link
+  const fromSections = topLinkFrom.map(s => findBestSection(s.page, target));
+  const toSections   = topLinkTo.map(s => findBestSection(target, s.page));
 
-  // Upgrade with Claude if API key is available
+  const fromAnchors    = topLinkFrom.map(s => headingAnchor(target, s.page));
+  const toAnchors      = topLinkTo.map(s => headingAnchor(s.page, target));
+  const fromRelevances = topLinkFrom.map(s => Math.round(s.relevance * 100));
+  const toRelevances   = topLinkTo.map(s => Math.round(s.relevance * 100));
+
   if (anthropicApiKey) {
     try {
-      const aiAnchors = await claudeAnchors(
+      const enriched = await claudeEnrich(
         target,
         topLinkFrom.map(s => s.page),
         topLinkTo.map(s => s.page),
         anthropicApiKey
       );
-      if (aiAnchors?.from) aiAnchors.from.forEach((a, i) => { if (a) fromAnchors[i] = a; });
-      if (aiAnchors?.to)   aiAnchors.to.forEach((a, i)   => { if (a) toAnchors[i] = a; });
+      enriched?.from?.forEach((r, i) => {
+        if (r?.anchor)    fromAnchors[i]    = r.anchor;
+        if (r?.relevance) fromRelevances[i] = r.relevance;
+      });
+      enriched?.to?.forEach((r, i) => {
+        if (r?.anchor)    toAnchors[i]    = r.anchor;
+        if (r?.relevance) toRelevances[i] = r.relevance;
+      });
     } catch (e) {
-      console.warn('[claude anchors] fell back to headings:', e.message);
+      console.warn('[claude enrich] fell back to TF-IDF + headings:', e.message);
     }
   }
 
   const linkFrom = topLinkFrom.map((s, i) => ({
     url: s.page.url,
     title: s.page.title || s.page.url,
-    relevance: Math.round(s.relevance * 100),
+    relevance: fromRelevances[i],
     suggestedAnchor: fromAnchors[i],
+    suggestedSection: fromSections[i] || null,
   }));
 
   const linkTo = topLinkTo.map((s, i) => ({
     url: s.page.url,
     title: s.page.title || s.page.url,
-    relevance: Math.round(s.relevance * 100),
+    relevance: toRelevances[i],
     suggestedAnchor: toAnchors[i],
+    suggestedSection: toSections[i] || null,
   }));
 
-  return { target: { url: target.url, title: target.title, h1: target.h1 }, linkFrom, linkTo };
+  return {
+    target: { url: target.url, title: target.title, h1: target.h1 },
+    stats: {
+      outboundLinks: target.outboundLinks.length,
+      candidatesChecked: pages.length,
+      alreadyLinkedFrom,
+      alreadyLinkedTo,
+    },
+    linkFrom,
+    linkTo,
+  };
 }
 
 module.exports = { analyzeOpportunities };

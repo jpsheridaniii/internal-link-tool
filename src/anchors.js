@@ -16,19 +16,17 @@ function headingAnchor(targetPage, sourcePage) {
   }
 
   if (best && bestScore >= 1) {
-    // Trim to 50 chars max, keep it clean
     return best.length <= 50 ? best.toLowerCase() : best.toLowerCase().split(' ').slice(0, 5).join(' ');
   }
 
-  // Fall back to target page title (shortened)
   const source = targetPage.h1 || targetPage.title || '';
   const clean = source.split(/ [|\-–—] /)[0].trim().toLowerCase();
   const words = clean.match(/[a-z]{3,}/g) || [];
   return clean.length <= 50 ? clean : words.slice(0, 4).join(' ');
 }
 
-// Claude batch call: suggest anchor text for all link:from and link:to results at once.
-async function claudeAnchors(target, linkFromPages, linkToPages, apiKey) {
+// Single Claude batch call: anchor text + topical relevance scores for all results.
+async function claudeEnrich(target, linkFromPages, linkToPages, apiKey) {
   if (!apiKey) return null;
 
   const client = new Anthropic({ apiKey });
@@ -38,20 +36,16 @@ async function claudeAnchors(target, linkFromPages, linkToPages, apiKey) {
     return `URL: ${page.url}\nTitle: ${page.title}\nH1: ${page.h1}\nHeadings: ${headings}`;
   };
 
-  const targetSnapshot = pageSnapshot(target);
+  const fromItems = linkFromPages.map((p, i) => `[FROM-${i}]\n${pageSnapshot(p)}`).join('\n\n');
+  const toItems   = linkToPages.map((p, i)   => `[TO-${i}]\n${pageSnapshot(p)}`).join('\n\n');
 
-  const fromItems = linkFromPages.map((p, i) =>
-    `[FROM-${i}]\n${pageSnapshot(p)}`
-  ).join('\n\n');
+  const targetFocus = `${target.h1 || ''} ${target.title || ''}`.trim();
 
-  const toItems = linkToPages.map((p, i) =>
-    `[TO-${i}]\n${pageSnapshot(p)}`
-  ).join('\n\n');
-
-  const prompt = `You are an SEO specialist suggesting internal link anchor text.
+  const prompt = `You are an SEO specialist analysing internal linking opportunities.
 
 TARGET PAGE (the page we want to build authority for):
-${targetSnapshot}
+${pageSnapshot(target)}
+Focus topic: "${targetFocus}"
 
 LINK:FROM PAGES (these pages should add a link TO the target):
 ${fromItems}
@@ -59,28 +53,28 @@ ${fromItems}
 LINK:TO PAGES (the target should add links TO these pages):
 ${toItems}
 
-For each page, suggest the single best anchor text phrase (2-5 words) to use when linking between that page and the target. The anchor should:
-- Be a natural phrase a reader would click
-- Reflect the topic of the PAGE BEING LINKED TO (not the linking page)
-- Be specific, not generic ("internal linking guide" not "click here")
-- Avoid keyword stuffing
+For each page provide:
+1. relevance (0-100): how topically relevant is this page to the target? Consider shared topics, subtopics, complementary content, and user journey fit. Be honest — 70+ means genuinely strong fit, 40-69 moderate, below 40 weak.
+2. anchor: the single best anchor text phrase (2-5 words) to use when linking between that page and the target. Should be natural, specific, and reflect the topic of the PAGE BEING LINKED TO.
 
-Return ONLY valid JSON in this exact format, no explanation:
+CRITICAL ANCHOR TEXT RULES:
+- LINK:FROM anchors: reflect the target page's topic — this signals authority TO the target.
+- LINK:TO anchors: do NOT reuse "${targetFocus}" keywords. Describe the destination page's specific angle instead.
+
+Return ONLY valid JSON, no explanation:
 {
-  "from": ["anchor for FROM-0", "anchor for FROM-1", ...],
-  "to": ["anchor for TO-0", "anchor for TO-1", ...]
+  "from": [{"anchor": "...", "relevance": 0-100}, ...],
+  "to":   [{"anchor": "...", "relevance": 0-100}, ...]
 }`;
 
   const msg = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
+    max_tokens: 1024,
     messages: [{ role: 'user', content: prompt }],
   });
 
-  const raw = msg.content[0].text.trim();
-  // Strip markdown code fences if present
-  const json = raw.replace(/^```json?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(json);
+  const raw = msg.content[0].text.trim().replace(/^```json?\s*/i, '').replace(/\s*```$/, '');
+  return JSON.parse(raw);
 }
 
-module.exports = { headingAnchor, claudeAnchors };
+module.exports = { headingAnchor, claudeEnrich };
